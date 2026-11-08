@@ -26,14 +26,14 @@ export interface Plate {
   active: boolean;
 }
 
-export type EndReason = 'time' | 'error';
+export type EndReason = 'time' | 'error' | 'inactive';
 export type Phase = 'idle' | 'playing' | 'ended';
 
 export interface EngineEvents {
   spawn: Plate;
-  serve: { plate: Plate; points: number };
+  serve: { plate: Plate; points: number; typed: string; correct: boolean };
   miss: Plate;
-  reject: { typed: string };
+  mistake: { typed: string };
   /** El campo de texto debe mostrar este valor. */
   value: string;
   end: EndReason;
@@ -59,6 +59,8 @@ export class TaqueroEngine {
   phase: Phase = 'idle';
   paused = false;
   value = '';
+  targetId: WordId | null = null;
+  readonly typedCorrectness: boolean[] = [];
   score = 0;
   served = 0;
   missed = 0;
@@ -76,6 +78,8 @@ export class TaqueroEngine {
   private recent: string[] = [];
   private spawnIn = 0;
   private lastTick = 0;
+  private started = false;
+  private missesBeforeFirstWord = 0;
 
   constructor(o: EngineOptions) {
     this.cfg = o.config;
@@ -101,9 +105,9 @@ export class TaqueroEngine {
   begin(now: number): void {
     if (this.phase !== 'idle') return;
     this.phase = 'playing';
-    this.rec.start(now);
     this.lastTick = now;
-    this.spawnIn = 0.2;
+    const first = this.spawn(now);
+    this.spawnIn = first ? this.delayFor(first.word, 0) : 0.2;
   }
 
   pause(): void {
@@ -127,6 +131,10 @@ export class TaqueroEngine {
   /** Avanza el juego hasta `now`. Se llama una vez por fotograma. */
   tick(now: number): void {
     if (this.phase !== 'playing' || this.paused) {
+      this.lastTick = now;
+      return;
+    }
+    if (!this.started) {
       this.lastTick = now;
       return;
     }
@@ -168,7 +176,15 @@ export class TaqueroEngine {
     if (action.type !== 'insert') {
       this.rec.erase({ erased: action.text, reason: action.type === 'clear' ? 'clear' : 'backspace', t: action.t });
       this.value = action.value;
+      this.typedCorrectness.splice(action.value.length);
+      if (!action.value) this.targetId = null;
+      this.events.emit('value', this.value);
       return;
+    }
+    if (!this.started && action.text.length > 0) {
+      this.started = true;
+      this.rec.start(action.t);
+      for (const plate of this.plates) this.rec.shown(plate.id, plate.word, action.t);
     }
     for (const ch of [...action.text]) {
       if (this.phase !== 'playing') break;
@@ -185,44 +201,49 @@ export class TaqueroEngine {
   // ---------------------------------------------------------------------------------------
 
   private typeChar(ch: string, t: number): void {
-    const prefix = this.key(this.value);
-    const target = this.leftmost((p) => p.norm.startsWith(prefix));
-    const expected = target ? (target.word[this.value.length] ?? null) : null;
+    let target = this.targetId === null ? null : this.plates.find((p) => p.id === this.targetId && p.active) ?? null;
+    if (!target && !this.value) {
+      const key = this.key(ch);
+      target = this.leftmost((p) => p.norm.startsWith(key)) ?? this.leftmost(() => true);
+      if (!target) return;
+      this.targetId = target.id;
+    }
+    if (!target) return;
 
-    const candidate = this.value + ch;
-    const key = this.key(candidate);
-    const match = this.leftmost((p) => p.norm.startsWith(key));
-
-    if (!match) {
-      // Sin platos habilitados, o letra que coincide con uno que aún está entrando: se ignora.
-      const early = this.plates.some((p) => !p.active && p.norm.startsWith(key));
-      if (early || !this.plates.some((p) => p.active)) return;
-      this.rec.char({ typed: ch, expected, correct: false, rejected: true, t });
+    const expected = target.word[this.value.length] ?? null;
+    const correct = expected !== null && this.key(ch) === this.key(expected);
+    this.value += ch;
+    this.typedCorrectness.push(correct);
+    this.rec.char({ typed: ch, expected, correct, rejected: false, t });
+    if (correct) this.correctKeys++;
+    else {
       this.errors++;
       this.streak = 0;
-      this.events.emit('reject', { typed: ch });
-      if (this.cfg.perfect) this.finish('error');
-      return;
+      this.events.emit('mistake', { typed: ch });
     }
 
-    this.value = candidate;
-    this.correctKeys++;
-    this.rec.char({ typed: ch, expected, correct: true, rejected: false, t });
-    const done = this.leftmost((p) => p.norm === key);
-    if (done) this.serve(done, t);
+    if ([...this.value].length >= [...target.word].length) this.serve(target, t);
   }
 
   private serve(p: Plate, t: number): void {
-    const points = Math.round(p.word.length * 10 * this.multiplier);
+    const typed = this.value;
+    const correct = this.typedCorrectness.every(Boolean) && this.key(typed) === p.norm;
+    const points = correct ? Math.round(p.word.length * 10 * this.multiplier) : 0;
     this.score += points;
     this.served++;
-    this.streak++;
-    if (this.streak > this.bestStreak) this.bestStreak = this.streak;
+    if (correct) {
+      this.streak++;
+      if (this.streak > this.bestStreak) this.bestStreak = this.streak;
+    }
     this.plates = this.plates.filter((q) => q !== p);
+    this.spawnIn = 0;
     this.rec.done({ wordId: p.id, t });
     this.value = '';
-    this.events.emit('serve', { plate: p, points });
+    this.targetId = null;
+    this.typedCorrectness.length = 0;
+    this.events.emit('serve', { plate: p, points, typed, correct });
     this.events.emit('value', '');
+    if (this.cfg.perfect && !correct) this.finish('error');
   }
 
   private lose(p: Plate, now: number): void {
@@ -230,12 +251,16 @@ export class TaqueroEngine {
     this.missed++;
     this.streak = 0;
     this.rec.lost({ wordId: p.id, outcome: 'missed', t: now });
+    if (this.served === 0) this.missesBeforeFirstWord++;
     this.events.emit('miss', p);
-    if (this.value && !this.leftmost((q) => q.norm.startsWith(this.key(this.value)))) {
+    if (this.targetId === p.id) {
       this.rec.erase({ erased: this.value, reason: 'abandon', t: now });
       this.value = '';
+      this.targetId = null;
+      this.typedCorrectness.length = 0;
       this.events.emit('value', '');
     }
+    if (this.served === 0 && this.missesBeforeFirstWord >= 3) this.finish('inactive');
   }
 
   private finish(reason: EndReason): void {
@@ -275,10 +300,10 @@ export class TaqueroEngine {
       lane,
       x: 1,
       w: DEFAULT_PLATE_WIDTH,
-      active: false
+      active: true
     };
     this.plates.push(plate);
-    this.rec.shown(plate.id, word, now);
+    if (this.started) this.rec.shown(plate.id, word, now);
     this.events.emit('spawn', plate);
     return plate;
   }

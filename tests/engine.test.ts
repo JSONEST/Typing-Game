@@ -56,18 +56,50 @@ test('aparecen platos y se sirven al escribirlos completos', () => {
   assert.ok(!s.engine.plates.includes(plate));
 });
 
-test('un plato solo se puede escribir cuando ya se ve completo', () => {
-  const s = setup({ perfect: true }, ['taco']);
+test('aparece otro pedido en cuanto se completa una palabra', () => {
+  const s = setup({}, ['taco', 'salsa', 'queso', 'mole']);
   s.engine.begin(0);
-  while (s.engine.plates.length === 0) s.advance(16);
+  const plate = waitForActivePlate(s);
+  assert.equal(s.engine.plates.length, 1);
+  s.type(plate.word);
+  s.advance(16);
+  assert.equal(s.engine.plates.length, 1);
+  assert.notEqual(s.engine.plates[0]!.id, plate.id);
+});
+
+test('el reloj y el movimiento comienzan con la primera letra', () => {
+  const s = setup({ durationMs: 30_000 }, ['taco']);
+  s.engine.begin(0);
   const plate = s.engine.plates[0]!;
-  assert.equal(plate.active, false);
-  // Mientras el plato no se vea completo, escribir no cuenta como error ni termina el turno.
+  const x = plate.x;
+  s.advance(5000);
+  assert.equal(s.engine.elapsedMs, 0);
+  assert.equal(s.engine.remainingMs, 30_000);
+  assert.equal(plate.x, x);
   s.type('t');
-  assert.equal(s.engine.value, '');
+  assert.equal(s.engine.elapsedMs, 0);
+  s.advance(1000);
+  assert.ok(Math.abs(s.engine.elapsedMs - 1000) < 20);
+});
+
+test('el turno termina tras perder tres pedidos antes de completar una palabra', () => {
+  const s = setup({ difficulty: 'dificil', durationMs: 120_000 }, ['aaaa', 'bbbb', 'cccc', 'dddd']);
+  s.engine.begin(0);
+  s.type('x');
+  s.advance(30_000);
+  assert.equal(s.engine.phase, 'ended');
+  assert.equal(s.engine.endReason, 'inactive');
+});
+
+test('el primer pedido aparece quieto y se puede escribir antes de iniciar el reloj', () => {
+  const s = setup({}, ['taco']);
+  s.engine.begin(0);
+  const plate = s.engine.plates[0]!;
+  assert.equal(plate.active, true);
+  assert.equal(s.engine.elapsedMs, 0);
+  s.type('t');
+  assert.equal(s.engine.value, 't');
   assert.equal(s.engine.phase, 'playing');
-  while (!plate.active) s.advance(16);
-  assert.ok(plate.x + plate.w <= 1);
 });
 
 test('los acentos son obligatorios si así se configura', () => {
@@ -76,7 +108,7 @@ test('los acentos son obligatorios si así se configura', () => {
   const plate = waitForActivePlate(s);
   assert.equal(plate.word, 'limón');
   s.type('limon');
-  assert.equal(s.engine.served, 0, 'sin acento no debe contar');
+  assert.equal(s.engine.served, 1, 'la palabra se completa aunque el acento sea incorrecto');
   assert.ok(s.engine.errors >= 1);
 });
 
@@ -93,25 +125,30 @@ test('la ñ nunca se confunde con la n', () => {
   s.engine.begin(0);
   waitForActivePlate(s);
   s.type('pina');
-  assert.equal(s.engine.served, 0);
+  assert.equal(s.engine.served, 1);
+  assert.equal(s.engine.errors, 1);
 });
 
-test('una letra errónea se rechaza, corta la racha y se registra', () => {
+test('una letra errónea se conserva y permite completar la palabra', () => {
   const s = setup({}, ['taco']);
   s.engine.begin(0);
   waitForActivePlate(s);
   s.type('tx');
-  assert.equal(s.engine.value, 't');
+  assert.equal(s.engine.value, 'tx');
   assert.equal(s.engine.errors, 1);
-  s.type('aco');
+  s.type('co');
   assert.equal(s.engine.served, 1);
+  assert.equal(s.engine.value, '');
+  assert.equal(s.engine.score, 0);
   s.engine.stop();
   const m = computeMetrics(s.rec.events);
   assert.equal(m.errors, 1);
+  assert.equal(m.wordsDone, 1);
+  assert.equal(m.accuracy, 75);
   assert.deepEqual(m.troubleKeys, [{ key: 'a', count: 1 }]);
 });
 
-test('modo 100 % de precisión: un error termina el turno', () => {
+test('modo 100 % de precisión: deja completar la palabra antes de terminar el turno', () => {
   const s = setup({ perfect: true }, ['taco']);
   let ended: string | null = null;
   s.engine.events.on('end', (r) => {
@@ -120,13 +157,16 @@ test('modo 100 % de precisión: un error termina el turno', () => {
   s.engine.begin(0);
   waitForActivePlate(s);
   s.type('tx');
+  assert.equal(ended, null);
+  s.type('co');
   assert.equal(ended, 'error');
   assert.equal(s.engine.phase, 'ended');
 });
 
 test('el turno termina exactamente a la duración configurada', () => {
-  const s = setup({ durationMs: 30_000 });
+  const s = setup({ durationMs: 30_000 }, ['taco']);
   s.engine.begin(0);
+  s.type('taco');
   s.advance(31_000);
   assert.equal(s.engine.phase, 'ended');
   assert.equal(s.engine.endReason, 'time');
@@ -136,6 +176,7 @@ test('el turno termina exactamente a la duración configurada', () => {
 test('un plato que llega al borde se pierde y se registra', () => {
   const s = setup({}, ['taco', 'salsa', 'queso', 'limón']);
   s.engine.begin(0);
+  s.type('x');
   s.advance(20_000);
   assert.ok(s.engine.missed > 0);
   s.engine.stop();
@@ -160,6 +201,7 @@ test('al perderse el plato que se estaba escribiendo, el campo se limpia como «
 test('la pausa detiene el juego y no cuenta como tiempo', () => {
   const s = setup();
   s.engine.begin(0);
+  s.type('t');
   s.advance(2000);
   const x = s.engine.plates.map((p) => p.x);
   s.engine.pause();

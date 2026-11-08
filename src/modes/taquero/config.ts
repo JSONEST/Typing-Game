@@ -6,7 +6,7 @@ export interface TaqueroConfig {
   durationMs: number;
   /** Si es verdadero, «limon» no vale por «limón». La ñ siempre es obligatoria. */
   strictAccents: boolean;
-  /** Modificador «100 % de precisión»: la primera letra equivocada termina el turno. */
+  /** El turno termina al completar una palabra con errores. */
   perfect: boolean;
 }
 
