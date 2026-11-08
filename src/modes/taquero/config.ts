@@ -15,22 +15,19 @@ export interface DifficultyProfile {
   blurb: string;
   /** Velocidad de la banda en anchos de escena por segundo, al inicio del turno. */
   speed: number;
-  /** Segundos que se da por letra para que aparezca la siguiente palabra. */
-  charTime: number;
 }
 
 export const DIFFICULTIES: Record<Difficulty, DifficultyProfile> = {
-  facil: { label: 'Fácil', blurb: 'Palabras cortas de la cocina, casi sin acentos.', speed: 0.075, charTime: 0.46 },
-  medio: { label: 'Medio', blurb: 'Comida y vida diaria, con acentos y ñ.', speed: 0.088, charTime: 0.37 },
+  facil: { label: 'Fácil', blurb: 'Palabras cortas de la cocina, casi sin acentos.', speed: 0.075 },
+  medio: { label: 'Medio', blurb: 'Comida y vida diaria, con acentos y ñ.', speed: 0.088 },
   dificil: {
     label: 'Difícil',
     blurb: 'Frases de pedido, palabras largas y nombres de México.',
-    speed: 0.1,
-    charTime: 0.31
+    speed: 0.1
   }
 };
 
-export const DURATIONS_MS = [30_000, 60_000, 120_000] as const;
+export const DURATIONS_MS = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000] as const;
 
 export const DEFAULT_CONFIG: TaqueroConfig = {
   difficulty: 'medio',

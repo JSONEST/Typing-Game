@@ -103,11 +103,16 @@ a { color: inherit; }
 .globo-titulo { position: relative; z-index: 1; margin-bottom: 6px; color: var(--muted); font: 600 0.68rem / 1.2 var(--body); letter-spacing: 0.08em; text-transform: uppercase; }
 .globo-vacio { position: relative; z-index: 1; color: var(--muted); font-size: 0.9rem; }
 .lista-pedido { position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.pedido { min-width: 0; padding: 5px 7px; border: 2px solid var(--line); border-radius: 6px; background: var(--bg); transition: opacity 0.15s, border-color 0.15s; }
-.pedido-palabra { display: block; overflow-wrap: anywhere; font: 600 0.88rem / 1.25 var(--mono); }
+.pedido { min-width: 0; padding: 4px 7px; border: 2px solid var(--line); border-radius: 6px; background: var(--bg); transition: opacity 0.15s, border-color 0.15s; }
+.pedido-palabra { display: block; overflow-wrap: anywhere; font: 600 0.86rem / 1.2 var(--mono); }
 .pedido .letra-correcta { color: var(--ticket-ok); }
 .pedido .letra-error { color: var(--chile); text-decoration: underline wavy; text-underline-offset: 2px; }
-.pedido.objetivo { border-color: var(--rosa); background: color-mix(in srgb, var(--rosa) 8%, var(--surface)); }
+.pedido.objetivo { border-color: var(--line); }
+.letra-siguiente {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sol) 28%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol) 20%, transparent);
+}
 .pedido.coincide { border-color: var(--sol); }
 .pedido.entrando { opacity: 0.6; }
 .pedido-progreso { display: block; height: 3px; margin-top: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }

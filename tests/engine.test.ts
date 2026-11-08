@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { computeMetrics } from '../src/core/metrics.ts';
 import { mulberry32 } from '../src/core/random.ts';
 import { SessionRecorder } from '../src/core/recorder.ts';
-import { DEFAULT_CONFIG, type TaqueroConfig } from '../src/modes/taquero/config.ts';
+import { DEFAULT_CONFIG, DURATIONS_MS, sanitizeConfig, type TaqueroConfig } from '../src/modes/taquero/config.ts';
 import { TaqueroEngine } from '../src/modes/taquero/engine.ts';
 
 function setup(overrides: Partial<TaqueroConfig> = {}, words: readonly string[] = ['limón', 'taco', 'salsa', 'queso']) {
@@ -45,6 +45,12 @@ function waitForActivePlate(s: ReturnType<typeof setup>) {
   throw new Error('nunca apareció un plato');
 }
 
+test('la duración predeterminada es un minuto y admite los tiempos ofrecidos', () => {
+  assert.equal(DEFAULT_CONFIG.durationMs, 60_000);
+  assert.deepEqual(DURATIONS_MS, [10_000, 30_000, 60_000, 120_000, 300_000, 600_000]);
+  assert.equal(sanitizeConfig({ durationMs: 600_000 }).durationMs, 600_000);
+});
+
 test('aparecen platos y se sirven al escribirlos completos', () => {
   const s = setup();
   s.engine.begin(0);
@@ -57,14 +63,43 @@ test('aparecen platos y se sirven al escribirlos completos', () => {
 });
 
 test('aparece otro pedido en cuanto se completa una palabra', () => {
-  const s = setup({}, ['taco', 'salsa', 'queso', 'mole']);
+  const s = setup({}, ['taco', 'salsa', 'queso', 'mole', 'agua', 'arroz', 'limón']);
   s.engine.begin(0);
   const plate = waitForActivePlate(s);
-  assert.equal(s.engine.plates.length, 1);
+  assert.equal(s.engine.plates.length, 5);
   s.type(plate.word);
   s.advance(16);
-  assert.equal(s.engine.plates.length, 1);
+  assert.equal(s.engine.plates.length, 5);
   assert.notEqual(s.engine.plates[0]!.id, plate.id);
+});
+
+test('conserva la primera letra al pasar al siguiente pedido en una entrada agrupada', () => {
+  const s = setup({}, ['taco', 'salsa', 'queso', 'mole', 'agua', 'arroz', 'limón']);
+  const valueEvents: string[] = [];
+  s.engine.events.on('value', (value) => valueEvents.push(value));
+  s.engine.begin(0);
+  const first = s.engine.plates[0]!;
+  const second = s.engine.plates[1]!;
+
+  s.engine.input({
+    type: 'insert',
+    t: 90,
+    text: first.word + second.word[0],
+    value: first.word + second.word[0]
+  });
+
+  assert.equal(s.engine.served, 1);
+  assert.equal(s.engine.targetId, second.id);
+  assert.equal(s.engine.value, second.word[0]);
+  assert.deepEqual(valueEvents, [second.word[0]]);
+});
+
+test('presenta varios pedidos del cliente antes de empezar a contar', () => {
+  const s = setup({}, ['taco', 'salsa', 'queso', 'mole', 'agua', 'arroz', 'limón']);
+  s.engine.begin(0);
+  assert.equal(s.engine.plates.length, 5);
+  assert.equal(s.engine.elapsedMs, 0);
+  assert.equal(new Set(s.engine.plates.map((p) => p.word)).size, 5);
 });
 
 test('el reloj y el movimiento comienzan con la primera letra', () => {
@@ -100,6 +135,16 @@ test('el primer pedido aparece quieto y se puede escribir antes de iniciar el re
   s.type('t');
   assert.equal(s.engine.value, 't');
   assert.equal(s.engine.phase, 'playing');
+});
+
+test('el indicador apunta a la palabra que acepta la siguiente pulsación', () => {
+  const s = setup({}, ['taco', 'salsa', 'queso', 'mole']);
+  s.engine.begin(0);
+  const first = s.engine.plates[0]!;
+  assert.equal(s.engine.nextTargetId, first.id);
+  s.type('x');
+  assert.equal(s.engine.targetId, first.id);
+  assert.equal(s.engine.value, 'x');
 });
 
 test('los acentos son obligatorios si así se configura', () => {

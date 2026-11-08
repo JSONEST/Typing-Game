@@ -89,7 +89,6 @@ const TEMPLATE = `
       <label><input type="checkbox" data-el="perfect"> 100 % de precisión: un error termina el turno al completar la palabra</label>
       <label><input type="checkbox" data-el="sound"> Sonido</label>
     </div>
-    <p class="ayuda-acento">Con los acentos obligatorios, «limón» solo cuenta si escribes la ó. La ñ siempre es obligatoria. En computadora pulsa la tecla ´ (junto a la Ñ) y luego la vocal. En el celular mantén pulsada la vocal.</p>
   </fieldset>
   <div class="resultado" data-el="result" aria-live="polite"></div>
 </div>`;
@@ -148,7 +147,7 @@ export function mountTaquero(host: HTMLElement): () => void {
     );
     durBox.replaceChildren(
       ...DURATIONS_MS.map((ms) =>
-        h('button', { class: 'chip', type: 'button', 'data-dur': ms, 'aria-pressed': String(cfg.durationMs === ms) }, ms >= 120_000 ? '2 min' : `${ms / 1000} s`)
+        h('button', { class: 'chip', type: 'button', 'data-dur': ms, 'aria-pressed': String(cfg.durationMs === ms) }, durationLabel(ms))
       )
     );
     diffDesc.textContent = DIFFICULTIES[cfg.difficulty].blurb;
@@ -210,14 +209,13 @@ export function mountTaquero(host: HTMLElement): () => void {
     } else if (kind === 'end' && extra) {
       card = h('div', { class: 'tarjeta' }, h('p', { class: 'kicker' }, 'Se acabó el turno'), h('p', { class: 't-rango' }, extra.title), h('p', { class: 't-sub' }, extra.sub), start);
     } else {
-      const dur = cfg.durationMs >= 120_000 ? '2 min' : `${cfg.durationMs / 1000} s`;
+      const dur = durationLabel(cfg.durationMs);
       card = h(
         'div',
         { class: 'tarjeta' },
         h('p', { class: 'kicker' }, `Turno de ${dur} · ${DIFFICULTIES[cfg.difficulty].label}${cfg.perfect ? ' · 100 %' : ''}`),
         start,
         h('p', { class: 'nota' }, 'Realiza una pulsación para comenzar.'),
-        h('p', { class: 'nota' }, 'Escribe las palabras que pide el cliente. Ejemplo: ', h('kbd', null, demoWord(0)))
       );
     }
     veil.replaceChildren(card);
@@ -259,6 +257,7 @@ export function mountTaquero(host: HTMLElement): () => void {
       const word = demoWord(lane);
       const { el } = makePlateEl(word);
       el.classList.add('pedido-demo');
+      renderWord(el.querySelector('.ok') as HTMLElement, el.querySelector('.resto') as HTMLElement, word, '', [], false);
       ordersEl.append(el);
       return el;
     });
@@ -275,25 +274,44 @@ export function mountTaquero(host: HTMLElement): () => void {
 
   function refreshMarks(): void {
     if (!engine || engine.phase !== 'playing') return;
+    const targetId = engine.targetId;
     for (const v of views.values()) {
-      const isTarget = v.plate.id === engine.targetId;
+      const isTarget = targetId !== null && v.plate.id === targetId;
       const typed = isTarget ? engine.value : '';
       const correctness = isTarget ? engine.typedCorrectness : [];
-      const signature = `${typed}:${correctness.map(Number).join('')}`;
+      const signature = `${isTarget ? 1 : 0}:${typed}:${correctness.map(Number).join('')}`;
       if (v.shown !== signature) {
-        v.ok.replaceChildren(
-          ...[...typed].map((ch, index) =>
-            h('span', { class: correctness[index] ? 'letra-correcta' : 'letra-error' }, ch)
-          )
-        );
-        v.rest.textContent = [...v.plate.word].slice([...typed].length).join('');
+        renderWord(v.ok, v.rest, v.plate.word, typed, correctness, isTarget);
         v.shown = signature;
       }
       v.el.classList.remove('coincide');
-      v.el.classList.toggle('objetivo', isTarget);
+      v.el.classList.toggle('siguiente', isTarget);
+      v.el.classList.toggle('objetivo', isTarget && engine.value.length > 0);
       v.el.classList.toggle('entrando', !v.plate.active);
       v.progress.style.transform = `scaleX(${Math.max(0, Math.min(1, v.plate.x + v.plate.w)).toFixed(3)})`;
     }
+  }
+
+  function renderWord(
+    ok: HTMLElement,
+    rest: HTMLElement,
+    word: string,
+    typed: string,
+    correctness: readonly boolean[],
+    markNextLetter = true
+  ): void {
+    const letters = [...word];
+    const entered = [...typed];
+    ok.replaceChildren(
+      ...entered.map((ch, index) =>
+        h('span', { class: correctness[index] ? 'letra-correcta' : 'letra-error' }, ch)
+      )
+    );
+    rest.replaceChildren(
+      ...letters.slice(entered.length).map((ch, index) =>
+        h('span', { class: markNextLetter && index === 0 ? 'letra-siguiente' : null }, ch)
+      )
+    );
   }
 
   function resetNotebook(): void {
@@ -343,6 +361,32 @@ export function mountTaquero(host: HTMLElement): () => void {
     restartBtn.disabled = true;
     streakEl.hidden = true;
     beginPlay(performance.now());
+  }
+
+  function resetToSettings(): void {
+    if (engine) {
+      engine.events.clear();
+      engine.stop();
+      engine = null;
+    }
+    recorder = null;
+    phase = 'idle';
+    clearDemo();
+    for (const v of views.values()) v.el.remove();
+    views.clear();
+    showDemo();
+    resetNotebook();
+    result.replaceChildren();
+    capture.setValue('');
+    input.disabled = true;
+    input.placeholder = 'Pulsa una tecla para comenzar';
+    pauseBtn.disabled = true;
+    pauseBtn.textContent = 'Pausa';
+    restartBtn.disabled = true;
+    streakEl.hidden = true;
+    lock(false);
+    renderSettings();
+    showVeil('idle');
   }
 
   function wireEngine(e: TaqueroEngine): void {
@@ -459,6 +503,11 @@ export function mountTaquero(host: HTMLElement): () => void {
 
   // ---------------------------------------------------------------- bucle
 
+  function durationLabel(ms: number): string {
+    if (ms < 60_000) return `${ms / 1000} s`;
+    return `${ms / 60_000} min`;
+  }
+
   const timeText = (ms: number) => {
     const s = Math.ceil(ms / 1000 - 1e-6);
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -494,7 +543,7 @@ export function mountTaquero(host: HTMLElement): () => void {
   };
   document.addEventListener('visibilitychange', onVisibility);
   pauseBtn.addEventListener('click', () => (phase === 'playing' ? pause() : resume()));
-  restartBtn.addEventListener('click', startTurn);
+  restartBtn.addEventListener('click', resetToSettings);
   stage.addEventListener('pointerdown', () => {
     if (phase === 'playing') capture.focus();
   });

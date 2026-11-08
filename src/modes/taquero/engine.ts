@@ -49,7 +49,7 @@ export interface EngineOptions {
 
 const DEFAULT_PLATE_WIDTH = 0.12;
 const MAX_DT = 0.05;
-const RECENT_WORDS = 12;
+const RECENT_WORDS = 24;
 
 export class TaqueroEngine {
   readonly events = new Emitter<EngineEvents>();
@@ -86,7 +86,7 @@ export class TaqueroEngine {
     this.words = o.words;
     this.rng = o.rng;
     this.rec = o.recorder;
-    this.lanes = o.lanes ?? 3;
+    this.lanes = o.lanes ?? 5;
   }
 
   get multiplier(): number {
@@ -101,13 +101,20 @@ export class TaqueroEngine {
     return Math.max(0, this.cfg.durationMs - this.rec.elapsed());
   }
 
+  get nextTargetId(): WordId | null {
+    if (this.targetId !== null && this.plates.some((p) => p.id === this.targetId && p.active)) return this.targetId;
+    return this.leftmost(() => true)?.id ?? null;
+  }
+
   /** Empieza el turno. `now` está en la misma escala que el reloj de la grabadora. */
   begin(now: number): void {
     if (this.phase !== 'idle') return;
     this.phase = 'playing';
     this.lastTick = now;
-    const first = this.spawn(now);
-    this.spawnIn = first ? this.delayFor(first.word, 0) : 0.2;
+    while (this.plates.length < this.lanes && this.spawn(now)) {
+      // Fill the customer's visible order before the timer starts.
+    }
+    this.spawnIn = 0;
   }
 
   pause(): void {
@@ -155,14 +162,17 @@ export class TaqueroEngine {
       // Se puede escribir un plato cuando ya se ve completo: nunca se castiga una letra
       // sobre una palabra que el jugador todavía no puede leer entera.
       if (!p.active && p.x + p.w <= 1) p.active = true;
-      if (p.x + p.w < 0) this.lose(p, now);
+      if (p.x + p.w < 0) {
+        this.lose(p, now);
+        if (this.phase !== 'playing') return;
+      }
     }
     if (this.phase !== 'playing') return;
 
     this.spawnIn -= dt;
-    if (this.spawnIn <= 0) {
+    if (this.spawnIn <= 0 && this.plates.length < this.lanes) {
       const plate = this.spawn(now);
-      this.spawnIn = plate ? this.delayFor(plate.word, progress) : 0.25;
+      this.spawnIn = plate ? 0 : 0.05;
     }
   }
 
@@ -201,14 +211,10 @@ export class TaqueroEngine {
   // ---------------------------------------------------------------------------------------
 
   private typeChar(ch: string, t: number): void {
-    let target = this.targetId === null ? null : this.plates.find((p) => p.id === this.targetId && p.active) ?? null;
-    if (!target && !this.value) {
-      const key = this.key(ch);
-      target = this.leftmost((p) => p.norm.startsWith(key)) ?? this.leftmost(() => true);
-      if (!target) return;
-      this.targetId = target.id;
-    }
+    const targetId = this.nextTargetId;
+    const target = targetId === null ? null : this.plates.find((p) => p.id === targetId && p.active) ?? null;
     if (!target) return;
+    this.targetId = target.id;
 
     const expected = target.word[this.value.length] ?? null;
     const correct = expected !== null && this.key(ch) === this.key(expected);
@@ -242,7 +248,6 @@ export class TaqueroEngine {
     this.targetId = null;
     this.typedCorrectness.length = 0;
     this.events.emit('serve', { plate: p, points, typed, correct });
-    this.events.emit('value', '');
     if (this.cfg.perfect && !correct) this.finish('error');
   }
 
@@ -281,11 +286,6 @@ export class TaqueroEngine {
       if (p.active && test(p) && (!best || p.x < best.x)) best = p;
     }
     return best;
-  }
-
-  private delayFor(word: string, progress: number): number {
-    const base = word.length * DIFFICULTIES[this.cfg.difficulty].charTime + 0.35;
-    return base * (1 - 0.25 * progress) * (0.85 + this.rng() * 0.3);
   }
 
   private spawn(now: number): Plate | null {
